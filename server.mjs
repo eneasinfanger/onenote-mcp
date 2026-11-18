@@ -1,35 +1,13 @@
 #!/usr/bin/env node
-// Lokaler MCP-Server für OneNote: stellt das PowerShell-Skript des Skills als Werkzeuge bereit.
-import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+// Lokaler MCP-Server (stdio) für die OneNote-Desktop-App.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-
-const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "skill", "onenote", "scripts", "onenote.ps1");
-
-function runScript(args) {
-  return new Promise((resolve) => {
-    execFile(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", SCRIPT, ...args],
-      { encoding: "utf8", maxBuffer: 32 * 1024 * 1024, windowsHide: true, timeout: 120_000 },
-      (err, stdout, stderr) => {
-        if (err) {
-          resolve({ isError: true, content: [{ type: "text", text: (stderr || err.message).trim() }] });
-        } else {
-          resolve({ content: [{ type: "text", text: stdout.trim() || "(leer)" }] });
-        }
-      },
-    );
-  });
-}
+import * as onenote from "./lib/onenote.mjs";
+import * as fmt from "./lib/format.mjs";
 
 const server = new McpServer(
-  { name: "onenote", version: "1.0.0" },
+  { name: "onenote", version: "2.0.0" },
   {
     instructions:
       "Zugriff auf die lokal installierte OneNote-Desktop-App. Vorgehen: onenote_sections (Abschnitt per Pfad finden) → " +
@@ -39,6 +17,15 @@ const server = new McpServer(
       "Gruppen anderer Schüler in Kursnotizbüchern nur auf ausdrücklichen Wunsch lesen.",
   },
 );
+
+/** Führt fn aus und verpackt das Ergebnis (oder den Fehler) als MCP-Textantwort. */
+const tool = (fn) => async (args) => {
+  try {
+    return { content: [{ type: "text", text: await fn(args) }] };
+  } catch (err) {
+    return { isError: true, content: [{ type: "text", text: err.message }] };
+  }
+};
 
 const readOnly = { readOnlyHint: true, openWorldHint: false };
 
@@ -50,7 +37,7 @@ server.registerTool(
     inputSchema: {},
     annotations: readOnly,
   },
-  async () => runScript(["tree"]),
+  tool(async () => fmt.formatTree(await onenote.getTree())),
 );
 
 server.registerTool(
@@ -61,7 +48,7 @@ server.registerTool(
     inputSchema: { filter: z.string().optional().describe("Teil des Pfads, z. B. 'Infanger Eneas / Steuern'") },
     annotations: readOnly,
   },
-  async ({ filter }) => runScript(filter ? ["sections", "-Filter", filter] : ["sections"]),
+  tool(async ({ filter }) => fmt.formatSections(await onenote.listSections(filter))),
 );
 
 server.registerTool(
@@ -72,7 +59,7 @@ server.registerTool(
     inputSchema: { section_id: z.string().describe("Abschnitts-ID aus onenote_sections") },
     annotations: readOnly,
   },
-  async ({ section_id }) => runScript(["pages", "-Id", section_id]),
+  tool(async ({ section_id }) => fmt.formatPages(await onenote.listPages(section_id))),
 );
 
 server.registerTool(
@@ -84,7 +71,7 @@ server.registerTool(
     inputSchema: { page_id: z.string().describe("Seiten-ID aus onenote_pages oder onenote_search") },
     annotations: readOnly,
   },
-  async ({ page_id }) => runScript(["read", "-Id", page_id]),
+  tool(async ({ page_id }) => fmt.formatPage(await onenote.readPage(page_id))),
 );
 
 server.registerTool(
@@ -98,7 +85,7 @@ server.registerTool(
     },
     annotations: readOnly,
   },
-  async ({ query, scope_id }) => runScript(["search", "-Query", query, ...(scope_id ? ["-Id", scope_id] : [])]),
+  tool(async ({ query, scope_id }) => fmt.formatSearch(await onenote.search(query, scope_id))),
 );
 
 server.registerTool(
@@ -114,16 +101,7 @@ server.registerTool(
     },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   },
-  async ({ section_id, title, body }) => {
-    const dir = await mkdtemp(join(tmpdir(), "onenote-mcp-"));
-    const file = join(dir, "body.txt");
-    try {
-      await writeFile(file, body ?? "", "utf8");
-      return await runScript(["create", "-Id", section_id, "-Title", title, "-BodyFile", file]);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  },
+  tool(async ({ section_id, title, body }) => fmt.formatCreated(await onenote.createPage(section_id, title, body))),
 );
 
 await server.connect(new StdioServerTransport());

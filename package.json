@@ -1,18 +1,20 @@
 {
   "name": "onenote-mcp",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Lokaler MCP-Server und Claude-Skill für die OneNote-Desktop-App (COM)",
   "type": "module",
   "main": "server.mjs",
   "private": true,
   "scripts": {
-    "start": "node server.mjs"
+    "start": "node server.mjs",
+    "test": "node test/smoke.mjs"
   },
   "os": [
     "win32"
   ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
+    "@xmldom/xmldom": "^0.9.12",
     "zod": "^4.6.7"
   }
 }

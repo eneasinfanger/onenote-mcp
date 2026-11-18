@@ -2,12 +2,29 @@
 
 Zugriff von Claude auf die lokal installierte **OneNote-Desktop-App** über deren COM-Schnittstelle. Es braucht kein Microsoft Graph und keine App-Freigabe im Microsoft-365-Konto.
 
-Enthält zwei Wege, die dasselbe PowerShell-Skript nutzen:
-
 | Teil | Für | Ort |
 |---|---|---|
+| Bibliothek | gemeinsame Logik, importierbar | `lib/onenote.mjs` |
 | MCP-Server | Claude-Desktop-App (Chat und Projekte) | `server.mjs` |
-| Skill | Claude Code (Terminal, Code-Tab) | `skill/onenote/` |
+| Skill + Kommandozeile | Claude Code (Terminal, Code-Tab) | `skill/onenote/` |
+
+## Aufbau
+
+```
+server.mjs / skill/onenote/scripts/onenote.mjs
+        │  import
+        ▼
+lib/onenote.mjs   XML auswerten, Text aufbereiten, Seiten erstellen
+lib/format.mjs    Textausgabe
+        │
+        ▼
+lib/bridge.mjs    startet bridge.ps1 einmal und hält es am Laufen
+        │  JSON-Zeilen über stdin/stdout
+        ▼
+lib/bridge.ps1    nur die rohen COM-Aufrufe an OneNote.Application
+```
+
+JavaScript hat keinen eigenen COM-Zugriff. Die PowerShell-Brücke ist deshalb bewusst minimal gehalten: Sie nimmt eine Anfrage pro Zeile entgegen und gibt das rohe XML base64-kodiert zurück. Nach dem Start dauert ein Aufruf nur wenige Millisekunden.
 
 ## Voraussetzungen
 
@@ -45,7 +62,9 @@ Den Skill-Ordner nach `~/.claude/skills/onenote` verlinken:
 New-Item -ItemType Junction -Path "$env:USERPROFILE\.claude\skills\onenote" -Target "$PWD\skill\onenote"
 ```
 
-## Werkzeuge
+## Verwendung
+
+### MCP-Werkzeuge
 
 | Werkzeug | Zweck |
 |---|---|
@@ -56,19 +75,33 @@ New-Item -ItemType Junction -Path "$env:USERPROFILE\.claude\skills\onenote" -Tar
 | `onenote_search` | Volltextsuche (Windows-Suchindex) |
 | `onenote_create_page` | Neue Seite erstellen |
 
-Das Skript lässt sich auch direkt aufrufen:
+### Kommandozeile
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File skill\onenote\scripts\onenote.ps1 tree
+node skill\onenote\scripts\onenote.mjs tree
+node skill\onenote\scripts\onenote.mjs sections --filter "Steuern" --json
+```
+
+### Als Bibliothek
+
+```js
+import { listSections, listPages, readPage, close } from "./lib/onenote.mjs";
+
+const [section] = await listSections("Infanger Eneas / Steuern");
+for (const page of await listPages(section.id)) {
+  const { title, text } = await readPage(page.id);
+  console.log(title, text.length);
+}
+close();
 ```
 
 ## Test
 
 ```powershell
-node test/smoke.mjs "Teil eines Abschnittspfads"
+npm test -- "Teil eines Abschnittspfads"
 ```
 
-Startet den Server und ruft die lesenden Werkzeuge auf. Dabei wird nichts geschrieben.
+Startet den Server und ruft die lesenden Werkzeuge auf, inklusive Fehlerfall. Dabei wird nichts geschrieben.
 
 ## Grenzen
 
